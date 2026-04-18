@@ -1,3 +1,4 @@
+import os
 import chromadb
 from chromadb.config import Settings
 
@@ -11,7 +12,7 @@ def get_client() -> chromadb.Client:
     global _client
     if _client is None:
         _client = chromadb.PersistentClient(
-            path="./chroma_data",
+            path=os.getenv("CHROMA_PATH", "/data/chromadb"),
             settings=Settings(anonymized_telemetry=False),
         )
     return _client
