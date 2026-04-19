@@ -48,10 +48,29 @@ async def main():
         r.raise_for_status()
         data = r.json()
 
+    # Save raw JSON to parsed_documents/
+    import json
+    from pathlib import Path
+    parsed_dir = Path(os.getenv("PARSED_JSON_DIR", "./parsed_documents"))
+    parsed_dir.mkdir(parents=True, exist_ok=True)
+    safe_name = filename.rsplit(".", 1)[0].replace(" ", "_")
+    json_path = parsed_dir / f"{safe_name}__{job_id[:8]}.json"
+    json_path.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+    print(f"Saved parsed JSON to {json_path}")
+
     # Import services (must run from backend/)
     from services.landing_ai import extract_chunks
     from services.embedder import embed
     from services.chroma_client import get_collection
+
+    # Check for existing document with same filename to avoid duplicates
+    collection = get_collection()
+    existing = collection.get(where={"filename": filename}, include=["metadatas"])
+    if existing.get("ids"):
+        existing_doc_id = existing["metadatas"][0].get("doc_id")
+        print(f"\nDocument '{filename}' is already indexed (doc_id: {existing_doc_id}).")
+        print("Skipping re-index. Delete it from the library first if you want to re-index.")
+        sys.exit(0)
     import uuid
 
     chunks = extract_chunks(data)
@@ -79,6 +98,13 @@ async def main():
             "filing_type": filing_type,
             "page": c["page"],
             "chunk_index": c["chunk_index"],
+            "chunk_type": c.get("chunk_type", "text"),
+            "section_heading": c.get("section_heading", ""),
+            "char_count": c.get("char_count", len(c["text"])),
+            "box_left": c.get("box_left", 0.0),
+            "box_top": c.get("box_top", 0.0),
+            "box_right": c.get("box_right", 1.0),
+            "box_bottom": c.get("box_bottom", 1.0),
         }
         for c in chunks
     ]

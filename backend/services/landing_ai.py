@@ -81,6 +81,21 @@ async def poll_job(job_id: str) -> dict:
     raise RuntimeError(f"Landing.ai job {job_id} timed out after {MAX_WAIT}s")
 
 
+# Chunk types that carry no useful text for RAG retrieval
+_SKIP_TYPES = {"marginalia", "logo", "figure", "attestation"}
+
+# Heuristics to detect heading-like text chunks (Landing.ai uses type=text for headings)
+def _is_heading(text: str) -> bool:
+    import re
+    if text.startswith("#"):
+        return True
+    if re.match(r"^\*\*.+\*\*$", text.strip()):
+        return True
+    if re.match(r"^(Item\s+\d+[A-Z]?\.|PART\s+(I|II|III|IV|V))\b", text.strip(), re.IGNORECASE):
+        return True
+    return False
+
+
 def extract_chunks(data: dict) -> list[dict]:
     # Unwrap envelope if results are nested under "data"
     if isinstance(data.get("data"), dict) and "chunks" in data["data"]:
@@ -90,19 +105,45 @@ def extract_chunks(data: dict) -> list[dict]:
 
     if raw_chunks and isinstance(raw_chunks, list):
         chunks = []
+        current_heading = ""
+        chunk_index = 0
         for i, chunk in enumerate(raw_chunks):
+            chunk_type = chunk.get("type", "text")
+
+            # Skip noise types
+            if chunk_type in _SKIP_TYPES:
+                continue
+
             text = chunk.get("markdown") or chunk.get("text") or chunk.get("content") or ""
-            # grounding is a dict with {"box": {...}, "page": N} — page is 0-indexed
             grounding = chunk.get("grounding") or {}
             page_num = grounding.get("page", i)
             if isinstance(page_num, (int, float)):
                 page_num = int(page_num) + 1  # convert to 1-indexed
             else:
                 page_num = i + 1
-            # Strip HTML anchor tags Landing.ai injects
+
             clean_text = _strip_anchors(text)
-            if clean_text:
-                chunks.append({"text": clean_text, "page": page_num, "chunk_index": i})
+            if not clean_text:
+                continue
+
+            # Track the current section heading
+            if _is_heading(clean_text):
+                current_heading = clean_text[:200]
+
+            box = grounding.get("box") or {}
+            chunks.append({
+                "text": clean_text,
+                "page": page_num,
+                "chunk_index": chunk_index,
+                "chunk_type": chunk_type,
+                "section_heading": current_heading,
+                "char_count": len(clean_text),
+                "box_left": box.get("left", 0.0),
+                "box_top": box.get("top", 0.0),
+                "box_right": box.get("right", 1.0),
+                "box_bottom": box.get("bottom", 1.0),
+            })
+            chunk_index += 1
         if chunks:
             return chunks
 
@@ -110,9 +151,14 @@ def extract_chunks(data: dict) -> list[dict]:
     markdown = _strip_anchors(data.get("markdown") or "")
     if markdown:
         sections = [s.strip() for s in markdown.split("\n\n") if s.strip()]
-        return [{"text": s, "page": i + 1, "chunk_index": i} for i, s in enumerate(sections)]
+        return [
+            {"text": s, "page": i + 1, "chunk_index": i, "chunk_type": "text",
+             "section_heading": "", "char_count": len(s)}
+            for i, s in enumerate(sections)
+        ]
 
-    return [{"text": str(data), "page": 1, "chunk_index": 0}]
+    return [{"text": str(data), "page": 1, "chunk_index": 0, "chunk_type": "text",
+             "section_heading": "", "char_count": len(str(data))}]
 
 
 def _strip_anchors(text: str) -> str:

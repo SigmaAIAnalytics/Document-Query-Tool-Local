@@ -14,3 +14,9 @@ frontend/dist/
 
 # macOS
 .DS_Store
+
+# Claude Code internal state
+.claude/
+
+# Loose PDF files at repo root (originals, not part of app)
+/*.pdf

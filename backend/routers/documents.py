@@ -1,9 +1,15 @@
 import uuid
 import asyncio
+import json
+import os
+from pathlib import Path
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from services.landing_ai import submit_job, poll_job, extract_chunks
 from services.embedder import embed
 from services.chroma_client import get_collection
+from services.pdf_renderer import save_pdf
+
+PARSED_DIR = Path(os.getenv("PARSED_JSON_DIR", "./parsed_documents"))
 
 router = APIRouter()
 
@@ -33,6 +39,14 @@ async def _process_job(
         _jobs[internal_id]["status"] = "processing"
 
         result = await poll_job(landing_job_id)
+
+        # Persist raw Landing.ai JSON to disk
+        PARSED_DIR.mkdir(parents=True, exist_ok=True)
+        safe_name = filename.rsplit(".", 1)[0].replace(" ", "_")
+        json_path = PARSED_DIR / f"{safe_name}__{internal_id[:8]}.json"
+        json_path.write_text(json.dumps(result, indent=2, ensure_ascii=False))
+        print(f"[documents] Saved parsed JSON to {json_path}")
+
         chunks = extract_chunks(result)
 
         if not chunks:
@@ -46,6 +60,9 @@ async def _process_job(
         texts = [c["text"] for c in chunks]
         embeddings = embed(texts)
 
+        # Persist PDF to disk for page rendering
+        save_pdf(doc_id, file_bytes)
+
         collection = get_collection()
         ids = [f"{doc_id}_chunk_{c['chunk_index']}" for c in chunks]
         metadatas = [
@@ -56,6 +73,13 @@ async def _process_job(
                 "filing_type": filing_type,
                 "page": c["page"],
                 "chunk_index": c["chunk_index"],
+                "chunk_type": c.get("chunk_type", "text"),
+                "section_heading": c.get("section_heading", ""),
+                "char_count": c.get("char_count", len(c["text"])),
+                "box_left": c.get("box_left", 0.0),
+                "box_top": c.get("box_top", 0.0),
+                "box_right": c.get("box_right", 1.0),
+                "box_bottom": c.get("box_bottom", 1.0),
             }
             for c in chunks
         ]
@@ -69,6 +93,7 @@ async def _process_job(
             "company_name": resolved_company,
             "filing_type": filing_type,
             "chunk_count": len(chunks),
+            "parsed_json": str(json_path),
         }
 
     except Exception as exc:

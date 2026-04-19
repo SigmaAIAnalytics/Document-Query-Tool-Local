@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from routers import documents, query
+from routers import documents, query, pages, prompts
 
 app = FastAPI(title="SEC Filings RAG API", version="1.0.0")
 
@@ -14,6 +14,8 @@ app.add_middleware(
 )
 
 app.include_router(documents.router, prefix="/documents", tags=["documents"])
+app.include_router(pages.router, prefix="/pages", tags=["pages"])
+app.include_router(prompts.router, prefix="/prompts", tags=["prompts"])
 app.include_router(query.router, tags=["query"])
 
 
